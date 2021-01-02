@@ -111,7 +111,7 @@ class LRUCache<T> {
 
     private sweep() {
         for (const k of Object.keys(this.cache)) {
-            if (process.hrtime.bigint() - this.cache[k][0] > this.timeout * 0.001) {
+            if (process.hrtime.bigint() - this.cache[k][0] > this.timeout * 1000000) {
                 this.delItem(k);
             }
         }
@@ -134,6 +134,7 @@ interface SocksConfig {
     timeout?: number;
     maxConnections?: number;
 
+    auth?: boolean;
     onauth?: (username: Buffer, password: Buffer) => boolean;
 }
 
@@ -143,6 +144,7 @@ class Socks {
 
     private UDPServer: dgram.Socket;
 
+    private auth: boolean;
     private onauth: SocksConfig['onauth'];
 
     private timestamp: bigint;
@@ -154,31 +156,36 @@ class Socks {
             host = '127.0.0.1',
             port = 1080,
             timeout = 60 * 1000,
-            maxConnections = 666,
+            maxConnections = 100,
+            auth = false,
             onauth
         } = config;
 
         this.connections = 0;
 
+        this.auth = auth;
         this.onauth = onauth;
 
         this.timestamp = process.hrtime.bigint();
         this.netflowup = 0;
         this.netflowdown = 0;
 
+        // Tcp Connect
         this.TCPServer = new net.Server();
         this.TCPServer.maxConnections = maxConnections;
 
         this.TCPServer.on('listening', () => {
-            console.debug('Tcp server event "listening" has been emitted...');
+            console.debug(`Tcp server event "listening" has been emitted...`);
             console.info(`Tcp sever is listening at ${host}:${port}...`);
         });
         this.TCPServer.on('connection', connection => {
-            console.debug('Tcp server event "connection" has been emitted...');
+            console.debug(`Tcp server event "connection" has been emitted...`);
+            console.debug(`Client connection from ${connection.remoteAddress}:${connection.remotePort}`);
 
             this.connections++;
 
-            console.debug(`Tcp server has ${this.connections} connections.`);
+            console.debug(`Tcp server has ${this.connections} connections`);
+            console.debug(`Process Memory Usage : ${process.memoryUsage()}`);
 
             let stage = Stage.REQ;
             let connected = true;
@@ -194,37 +201,50 @@ class Socks {
             connection.setTimeout(timeout);
 
             connection.on('data', data => {
-                console.debug('Client connection event "data" has been emitted...', data);
+                console.debug(`Client connection event "data" has been emitted...`);
+                console.debug(`Data is ${data}`);
                 if (!connected) {
                     return;
                 }
-
                 this.netflowup += data.length;
-
                 switch (stage) {
                     case Stage.READY:
+                        console.debug('Stage READY...');
                         if (!remote.write(data)) {
                             connection.pause();
                         }
-                        console.debug('Stage READY...');
                         break;
                     case Stage.UDPRELAY:
+                        console.debug('Stage UDPRELAY...');
                         break;
                     case Stage.REQ:
+                        console.debug('Stage REQ...');
+                        if (data[0] !== Version.SOCKS5 || data.length !== data[1] + 2) {
+                            connection.end();
+                            stage = Stage.DISCONNECTED;
+                            return;
+                        }
                         let counts = data[1], methods = data.slice(2, 2 + counts);
-                        if (methods.includes(Method.USERPASS)) {
-                            connection.write(Buffer.from([Version.SOCKS5, Method.USERPASS]));
-                            stage = Stage.AUTH;
+                        if (this.auth) {
+                            if (methods.includes(Method.USERPASS)) {
+                                connection.write(Buffer.from([Version.SOCKS5, Method.USERPASS]));
+                                stage = Stage.AUTH;
+                            } else {
+                                connection.end(Buffer.from([Version.SOCKS5, Method.NONE]));
+                                stage = Stage.DISCONNECTED;
+                                return;
+                            }
                         } else {
                             connection.write(Buffer.from([Version.SOCKS5, Method.NOAUTH]));
                             stage = Stage.CMD;
                         }
-                        console.debug('Stage REQ...');
                         break;
                     case Stage.AUTH:
+                        console.debug('Stage AUTH...');
                         let version = data[0],
                             userlen = data[1], username = data.slice(2, 2 + userlen),
                             passlen = data[2 + userlen], password = data.slice(3 + userlen, 3 + userlen + passlen);
+                        console.debug(`Username : ${username} , Password : ${password}`);
                         if (this.onauth?.(username, password)) {
                             connection.write(Buffer.from([version, 0x00]));
                             stage = Stage.CMD;
@@ -232,9 +252,9 @@ class Socks {
                             connection.end(Buffer.from([version, 0xFF]));
                             stage = Stage.DISCONNECTED;
                         }
-                        console.debug('Stage AUTH...');
                         break;
                     case Stage.CMD:
+                        console.debug('Stage CMD...');
                         let cmd = data[1], addrtype = data[3];
                         switch (cmd) {
                             case Command.CONNECT:
@@ -265,11 +285,14 @@ class Socks {
                                     ip.toBuffer(connection.localAddress),
                                     localPort
                                 ]));
-                                console.debug('host:', host, 'port', port);
+
+                                console.debug(`Command CONNECT to ${host}:${port}...`);
+
                                 remote.connect(port, host);
                                 stage = Stage.READY;
                                 break;
                             case Command.ASSOCIATE:
+                                console.debug(`Command ASSOCIATE...`);
                                 let clientPort = Buffer.alloc(2);
                                 clientPort.writeUInt16BE(connection.localPort);
                                 connection.write(Buffer.concat([
@@ -280,19 +303,20 @@ class Socks {
                                 stage = Stage.UDPRELAY;
                                 break;
                             case Command.BIND:
+                            // TODO : Bind Command
                             default:
                                 connection.end(Buffer.from([Version.SOCKS5, Response.UNSUPPORTED_CMD, 0x00, Addrtype.IPV4]));
                                 stage = Stage.DISCONNECTED;
                                 return;
                         }
-                        console.debug('Stage CMD...');
                         break;
                     default:
+                        console.debug('Stage DISCONNECTED...');
                         return;
                 }
             });
             connection.on('drain', function () {
-                console.debug('Client connection event "drain" has been emitted...');
+                console.debug(`Client connection event "drain" has been emitted...`);
                 if (!connected) {
                     return;
                 }
@@ -307,14 +331,12 @@ class Socks {
                 clean();
             });
             connection.on('error', function (err) {
-                console.debug(`Client connection event "error" has been emitted...Error message is ${err.message}`);
-                if (!(err.message.includes('ETIMEDOUT') || err.message.includes('ECONNRESET'))) {
-                    console.error('Client connection has an error : ', err);
-                }
+                console.debug(`Client connection event "error" has been emitted..`);
+                console.debug(`CLient connection has an error : ${err.message}`);
                 clean();
             });
             connection.on('close', had_err => {
-                console.debug('Client connection event "close" has been emitted...', 'And whether caused by error is ', had_err);
+                console.debug(`Client connection event "close" has been emitted...It is ${had_err ? '' : 'not '}caused by error`);
                 this.connections--;
                 clean();
             });
@@ -322,13 +344,11 @@ class Socks {
             remote.setNoDelay(true);
             remote.setTimeout(timeout);
             remote.on('data', data => {
-                console.debug('Remote connection event "data" has been emitted...', data);
+                console.debug(`Remote connection event "data" has been emitted...Data is ${data}`);
                 if (!connected) {
                     return;
                 }
-
                 this.netflowdown += data.length;
-
                 if (!connection.write(data)) {
                     remote.pause();
                 }
@@ -341,33 +361,31 @@ class Socks {
                 connection.resume();
             });
             remote.on('timeout', function () {
-                console.debug('Remote connection event "timeout" has been emitted...');
+                console.debug(`Remote connection event "timeout" has been emitted...`);
                 clean();
             });
             remote.on('end', function () {
-                console.debug('Remote connection event "end" has been emitted...');
+                console.debug(`Remote connection event "end" has been emitted...`);
                 clean();
             });
             remote.on('error', function (err) {
-                console.debug(`Remote connection event "error" has been emitted...Error message is ${err.message}`);
-                if (!(err.message.includes('ETIMEDOUT') || err.message.includes('ECONNRESET'))) {
-                    console.error('Remote connection has an error : ', err);
-                }
+                console.debug(`Remote connection event "error" has been emitted...`);
+                console.debug(`Remote connection has an error : ${err.message}`);
                 clean();
             });
             remote.on('close', function (had_err) {
-                console.debug('Remote connection event "close" has been emitted...', 'And whether caused by error is ', had_err);
+                console.debug(`Remote connection event "close" has been emitted...It is ${had_err ? '' : 'not '}caused by error`);
                 clean();
             });
         });
         this.TCPServer.on('error', err => {
-            console.debug('Tcp server event "error" has been emitted...');
-            console.error('Tcp server has an error : ', err);
+            console.debug(`Tcp server event "error" has been emitted...`);
+            console.error(`Tcp server has an error : ${err.message}`);
         });
         this.TCPServer.on('close', () => {
-            console.debug('Tcp server event "close" has been emitted...');
-            console.info('Tcp server is closing...');
-            console.info(`Netflow upload : ${this.netflowup},download : ${this.netflowdown}.`);
+            console.debug(`Tcp server event "close" has been emitted...`);
+            console.info(`Tcp server is closing...`);
+            console.info(`Netflow upload : ${this.netflowup} , download : ${this.netflowdown}`);
         });
 
         this.TCPServer.listen(port, host);
@@ -377,16 +395,17 @@ class Socks {
 
         let server = this.UDPServer;
         let UDPSocketCache = new LRUCache<dgram.Socket>({
+            timeout: timeout,
             max: maxConnections,
             beforeDeleteFn: socket => socket.close()
         });
 
         server.on('listening', () => {
-            console.debug('Udp server event "listening" has been emitted...');
+            console.debug(`Udp server event "listening" has been emitted...`);
             console.info(`Udp server is listening at ${host}:${port}...`);
         });
         server.on('message', (data, rinfo) => {
-            console.debug('Udp server event "message" has been emitted...', data, rinfo);
+            console.debug(`Udp server event "message" has been emitted...`, data, rinfo);
 
             this.netflowup += data.length;
 
@@ -418,7 +437,7 @@ class Socks {
                 if (client === null) {
                     client = dgram.createSocket(ip.isV4Format(host) ? 'udp4' : 'udp6');
                     client.on('message', (_data, _rinfo) => {
-                        console.debug('Udp socket event "message" has been emitted...', _data, _rinfo);
+                        console.debug(`Udp socket event "message" has been emitted...`, _data, _rinfo);
 
                         this.netflowdown += data.length;
 
@@ -432,11 +451,11 @@ class Socks {
                         ]), rinfo.port, rinfo.address);
                     });
                     client.on('error', err => {
-                        console.debug('Udp socket event "error" has been emitted...');
-                        console.error('Udp socket has an error : ', err);
+                        console.debug(`Udp socket event "error" has been emitted...`);
+                        console.debug(`Udp socket has an error : ${err.message}`);
                     });
                     client.on('close', () => {
-                        console.debug('Udp socket event "close" has been emitted...');
+                        console.debug(`Udp socket event "close" has been emitted...`);
                     });
                     UDPSocketCache.setItem(key, client);
                 }
@@ -444,14 +463,14 @@ class Socks {
             }
         });
         server.on('error', err => {
-            console.debug('Udp server event "error" has been emitted...');
-            console.error('Udp server has an error : ', err);
+            console.debug(`Udp server event "error" has been emitted...`);
+            console.error(`Udp server has an error : ${err.message}`);
             UDPSocketCache.destroy();
         });
         server.on('close', () => {
-            console.debug('Udp server event "close" has been emitted...');
-            console.info('Udp server is closing...');
-            console.info(`Netflow upload : ${this.netflowup},download : ${this.netflowdown}.`);
+            console.debug(`Udp server event "close" has been emitted...`);
+            console.info(`Udp server is closing...`);
+            console.info(`Netflow upload : ${this.netflowup},download : ${this.netflowdown}`);
             UDPSocketCache.destroy();
         });
 

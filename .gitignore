@@ -1,13 +1,11 @@
-node_modules/
-
 deprecated/
 
-test.js
-
-test.ts
+node_modules/
 
 build/
 
 log.txt
 
 err.txt
+
+test/

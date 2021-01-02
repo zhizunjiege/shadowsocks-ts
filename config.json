@@ -1,14 +1,16 @@
 {
-    "host": "localhost",
+    "host": "0.0.0.0",
     "port": 1080,
-    "timeout": 60000,
-    "maxConnections": 666,
+    "timeout": 600000,
+    "maxConnections": 100,
     "log": {
         "level": "info",
-        "stdout": "./log.txt",
-        "stderr": "./err.txt"
+        "timestamp": true,
+        "stdout": "out.txt",
+        "stderr": "err.txt"
     },
+    "auth": true,
     "user": {
-        "bai": "piao"
+        "foo": "bar"
     }
 }

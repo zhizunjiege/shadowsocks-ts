@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es2020",
+    "target": "es2015",
     "module": "commonjs",
     "sourceMap": false,
-    "outDir": "./lib",
+    "outDir": "build",
     "removeComments": true,
     "resolveJsonModule": true,
     "strict": true,
@@ -12,9 +12,9 @@
     "strictFunctionTypes": true
   },
   "include": [
-    "./src/*"
+    "src/*"
   ],
   "exclude": [
-    "./node_modules/*"
+    "node_modules/*"
   ]
 }

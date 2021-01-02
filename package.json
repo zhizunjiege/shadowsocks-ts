@@ -1,7 +1,7 @@
 {
   "name": "socks5-ts",
   "version": "1.0.0",
-  "description": "A typescript version of socks5.",
+  "description": "A typescript version of socks5 server.",
   "main": "index.js",
   "dependencies": {
     "ip": "^1.1.5"
@@ -13,8 +13,8 @@
   },
   "scripts": {
     "build": "npx tsc || tsc",
-    "server": "npx pm2 start lib/server.js || pm2 start lib/server.js",
-    "stop": "npx pm2 delete lib/server.js || pm2 delete lib/server.js"
+    "server": "npx pm2 start build/server.js || pm2 start build/server.js",
+    "stop": "npx pm2 delete build/server.js || pm2 delete build/server.js"
   },
   "repository": {
     "type": "git",
